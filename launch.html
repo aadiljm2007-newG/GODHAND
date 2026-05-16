@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JAMPS.AI | Launch Sequence</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=JetBrains+Mono&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000;
+            font-family: 'Outfit', sans-serif;
+            height: 100vh;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        #bg-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            opacity: 0.3;
+        }
+
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 2rem 4rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #fff;
+            text-decoration: none;
+            text-transform: uppercase;
+            letter-spacing: -1px;
+            background: linear-gradient(135deg, #fff 0%, #f59e0b 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .launch-container {
+            text-align: center;
+            width: 100%;
+            max-width: 600px;
+            padding: 2rem;
+            z-index: 10;
+        }
+
+        h1 {
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 10px;
+            text-transform: uppercase;
+            margin-bottom: 3rem;
+            color: rgba(255, 255, 255, 0.4);
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 2px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 100px;
+            overflow: hidden;
+            margin-bottom: 2rem;
+            position: relative;
+        }
+
+        .progress-fill {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #f59e0b, #fff);
+            box-shadow: 0 0 20px rgba(245, 158, 11, 0.5);
+            transition: width 0.1s linear;
+        }
+
+        .status-text {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            color: rgba(255, 255, 255, 0.3);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            height: 1.5rem;
+        }
+
+        .terminal {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+            text-align: left;
+            -webkit-backdrop-filter: blur(20px);
+            backdrop-filter: blur(20px);
+        }
+
+        .terminal-line {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            margin-bottom: 0.5rem;
+            opacity: 0;
+            transform: translateX(-10px);
+            animation: slideIn 0.5s forwards;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .terminal-line.success {
+            color: #10b981;
+        }
+
+        .terminal-line.warning {
+            color: #f59e0b;
+        }
+
+        @keyframes slideIn {
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .back-btn {
+            position: fixed;
+            bottom: 4rem;
+            color: rgba(255, 255, 255, 0.2);
+            text-decoration: none;
+            font-size: 0.7rem;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            transition: color 0.3s;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 0.8rem 2rem;
+            border-radius: 100px;
+        }
+
+        .back-btn:hover {
+            color: #fff;
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+    </style>
+</head>
+
+<body>
+    <nav>
+        <a href="index.html" class="logo">JAMPS.AI</a>
+    </nav>
+
+    <div class="launch-container">
+        <h1>Initializing Core</h1>
+        <div class="progress-bar">
+            <div class="progress-fill"></div>
+        </div>
+        <div class="status-text">Synchronizing...</div>
+
+        <div class="terminal" id="terminal">
+            <!-- Terminal lines will be injected here -->
+        </div>
+    </div>
+
+    <a href="index.html" class="back-btn">Abort Sequence</a>
+
+    <script>
+        const progressFill = document.querySelector('.progress-fill');
+        const statusText = document.querySelector('.status-text');
+        const terminal = document.getElementById('terminal');
+
+        const logs = [
+            { text: "> BOOTING SYSTEM_CORE_V2.0", type: "default" },
+            { text: "> CONNECTING TO LIQUID_NETWORK...", type: "default" },
+            { text: "> STATUS: CONNECTED", type: "success" },
+            { text: "> VORTICITY_ENGINE: INITIALIZING", type: "default" },
+            { text: "> LOADING ASSETS/FLUID_MAP_01", type: "default" },
+            { text: "> SHADER_COMPILATION: COMPLETE", type: "success" },
+            { text: "> ALL_SYSTEMS_GO", type: "success" }
+        ];
+
+        let progress = 0;
+        let logIndex = 0;
+
+        function updateProgress() {
+            if (progress < 100) {
+                progress += Math.random() * 2;
+                if (progress > 100) progress = 100;
+                progressFill.style.width = progress + '%';
+
+                if (progress > (logIndex + 1) * (100 / logs.length)) {
+                    addLog(logs[logIndex]);
+                    logIndex++;
+                }
+
+                if (progress === 100) {
+                    statusText.innerText = "System Ready";
+                    statusText.style.color = "#10b981";
+                }
+
+                setTimeout(updateProgress, 50);
+            }
+        }
+
+        function addLog(log) {
+            const line = document.createElement('div');
+            line.className = 'terminal-line ' + (log.type || '');
+            line.innerText = log.text;
+            terminal.appendChild(line);
+
+            if (terminal.children.length > 8) {
+                terminal.removeChild(terminal.firstChild);
+            }
+        }
+
+        setTimeout(updateProgress, 1000);
+    </script>
+</body>
+
+</html>
