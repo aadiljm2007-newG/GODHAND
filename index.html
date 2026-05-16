@@ -171,7 +171,12 @@
             }
         });
 
-        camera.start();
+        camera.start().catch(err => {
+            console.error("Camera Error: ", err);
+            statusElement.innerText = "CAMERA ERROR: " + err.name;
+            statusElement.style.color = "#ff4444";
+            gestureElement.innerText = "Close other apps & refresh.";
+        });
 
         // Pointer state management for simulation
         let activePointers = [];
