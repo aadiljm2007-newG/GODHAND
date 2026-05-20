@@ -29,7 +29,7 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
-            background: radial-gradient(circle at 50% 50%, #1a0b2e 0%, #05020a 100%);
+            background: #000000;
         }
 
         canvas#fluid-canvas {
@@ -95,7 +95,7 @@
         resize();
 
         // --- HAND TRACKING SETUP ---
-        let handPoints = []; // [{x, y, dx, dy, active}] for each fingertip detected
+        let handPoints = [];
         let currentGesture = "NONE";
 
         const hands = new Hands({
@@ -103,18 +103,23 @@
         });
 
         hands.setOptions({
-            maxNumHands: 2,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.7,
-            minTrackingConfidence: 0.7
+            maxNumHands: 1,          // 1 hand = half the AI workload
+            modelComplexity: 0,      // Lite model — fastest inference
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
         });
 
+        // Throttle: Only send a frame to MediaPipe every 2nd RAF tick
+        let frameSkip = 0;
         const camera = new Camera(videoElement, {
             onFrame: async () => {
-                await hands.send({ image: videoElement });
+                frameSkip++;
+                if (frameSkip % 2 === 0) { // Process every 2nd frame
+                    await hands.send({ image: videoElement });
+                }
             },
-            width: 640,
-            height: 480
+            width: 320,   // Half resolution = significantly less CPU decoding
+            height: 240
         });
 
         function getDistance(p1, p2) {
@@ -130,23 +135,7 @@
                 statusElement.style.color = "#00ff88";
 
                 results.multiHandLandmarks.forEach((landmarks, index) => {
-                    // GESTURE ENGINE LOGIC
-                    const thumbTip = landmarks[4];
-                    const indexTip = landmarks[8];
-                    const wrist = landmarks[0];
-
-                    const pinchDist = getDistance(thumbTip, indexTip);
-                    const palmSize = getDistance(wrist, landmarks[5]); // Reference scale
-
-                    // 1. Pinch Detection
-                    if (pinchDist < palmSize * 0.3) {
-                        detectedGesture = "PINCH";
-                    }
-                    // 2. Fist Detection
-                    else {
-                        const isFist = [8, 12, 16, 20].every(id => getDistance(landmarks[id], wrist) < palmSize * 1.5);
-                        detectedGesture = isFist ? "FIST" : "OPEN PALM";
-                    }
+                    detectedGesture = "OPEN PALM";
                 });
             } else {
                 statusElement.innerText = "SEARCHING FOR HANDS...";
@@ -157,15 +146,6 @@
             updateHandPointers(results.multiHandLandmarks || [], detectedGesture);
 
             if (currentGesture !== detectedGesture) {
-                currentGesture = detectedGesture;
-                gestureElement.innerText = currentGesture !== "NONE" ? currentGesture : "";
-
-                // Trigger gesture effects
-                if (detectedGesture === "FIST") {
-                    const palm = results.multiHandLandmarks[0][9]; // Middle MCP
-                    triggerShockwave((1 - palm.x) * canvas.width, palm.y * canvas.height);
-                }
-
                 currentGesture = detectedGesture;
                 gestureElement.innerText = currentGesture !== "NONE" ? currentGesture : "";
             }
@@ -203,7 +183,7 @@
                         const pipToWrist = getDistance(pip, wrist);
                         const mcpToWrist = getDistance(mcp, wrist);
 
-                        // MUCH STRICTER: Tip must be clearly further from wrist than PIP and MCP
+                        // Tip must be clearly further from wrist than PIP and MCP
                         const isActive = (i === 0)
                             ? (tipToWrist > pipToWrist * 1.1)
                             : (tipToWrist > pipToWrist * 1.15 && tipToWrist > mcpToWrist * 1.3);
@@ -211,18 +191,13 @@
                         if (isActive) {
                             const curX = (1 - tip.x) * canvas.width;
                             const curY = tip.y * canvas.height;
-                            let dx = (curX - prev.x) * 8;
-                            let dy = (curY - prev.y) * 8;
-
-                            if (gesture === "PINCH") {
-                                const swirlX = -dy * 1.5;
-                                const swirlY = dx * 1.5;
-                                dx = swirlX; dy = swirlY;
-                            }
+                            // Multiplier of 5: responsive but not jarringly fast
+                            const dx = (curX - prev.x) * 5;
+                            const dy = (curY - prev.y) * 5;
 
                             newActivePointers[slotIdx] = {
-                                x: curX, y: curY, dx: dx, dy: dy,
-                                moved: true, active: true, gesture: gesture
+                                x: curX, y: curY, dx, dy,
+                                moved: true, active: true
                             };
                         } else {
                             newActivePointers[slotIdx] = { ...prev, moved: false, active: false };
@@ -235,42 +210,33 @@
             activePointers = newActivePointers;
         }
 
-        function triggerShockwave(cx, cy) {
-            // Massive splats in a circle around the palm
-            for (let i = 0; i < 12; i++) {
-                const angle = (i / 12) * Math.PI * 2;
-                const dist = 120; // Slightly tighter
-                const x = cx + Math.cos(angle) * dist;
-                const y = cy + Math.sin(angle) * dist;
-                splat(x, y, Math.cos(angle) * 4000, Math.sin(angle) * 4000, palette[Math.floor(Math.random() * palette.length)]);
-            }
-        }
+
 
         const config = {
-            SIM_RESOLUTION: 256,
-            DYE_RESOLUTION: 1024,
-            DENSITY_DISSIPATION: 0.98, // Faster decay to prevent white build-up
-            VELOCITY_DISSIPATION: 0.98,
-            PRESSURE: 0.8,
-            PRESSURE_ITERATIONS: 22,
-            CURL: 300,
-            SPLAT_RADIUS: 0.35,
-            SPLAT_FORCE: 4000, // Reduced force
-            COLORFUL: true,
-            BLOOM: true,
-            BLOOM_ITERATIONS: 8,
-            BLOOM_RESOLUTION: 256,
-            BLOOM_INTENSITY: 0.4, // Significantly reduced bloom
-            BLOOM_THRESHOLD: 0.7, // Higher threshold avoids blowing out mids
-            BLOOM_SOFT_KNEE: 0.7,
+            SIM_RESOLUTION: 128,
+            DYE_RESOLUTION: 512,
+            DENSITY_DISSIPATION: 0.96,    // Faster decay
+            VELOCITY_DISSIPATION: 0.95,   // Faster settling
+            PRESSURE: 0.5,
+            PRESSURE_ITERATIONS: 16,
+            CURL: 6,
+            SPLAT_RADIUS: 0.2,            // Smaller, sharper finger trails
+            SPLAT_FORCE: 2000,
+            COLORFUL: false,
+            BLOOM: false,
+            BLOOM_ITERATIONS: 0,
+            BLOOM_RESOLUTION: 128,
+            BLOOM_INTENSITY: 0,
+            BLOOM_THRESHOLD: 1.0,
+            BLOOM_SOFT_KNEE: 0.5,
         };
 
         const palette = [
-            { r: 1.00, g: 0.35, b: 0.05 }, // Electric Orange
-            { r: 0.90, g: 0.10, b: 0.95 }, // Cyber Magenta
-            { r: 0.35, g: 0.05, b: 1.00 }, // Deep Neon Purple
-            { r: 0.00, g: 0.45, b: 1.00 }, // Royal Electric Blue
-            { r: 0.04, g: 0.02, b: 0.10 }  // Void Midnight
+            { r: 1.00, g: 1.00, b: 1.00 }, // Pure White
+            { r: 0.80, g: 0.80, b: 0.80 }, // Light Grey
+            { r: 0.50, g: 0.50, b: 0.50 }, // Neutral Grey
+            { r: 0.20, g: 0.20, b: 0.20 }, // Dark Grey
+            { r: 0.05, g: 0.05, b: 0.05 }  // Deep Grey
         ];
         let colorIdx = 0;
 
@@ -322,54 +288,13 @@
             precision highp float;
             varying vec2 vUv;
             uniform sampler2D uTexture;
-            uniform sampler2D uVelocity;
             uniform sampler2D uParticles;
-            
-            float rand(vec2 co) {
-                return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
-            }
 
             void main () {
-                // Vibrant Ambient Background (Replacing Black)
-                vec3 bgColor1 = vec3(0.12, 0.04, 0.25); // Deep Purple Stop
-                vec3 bgColor2 = vec3(0.04, 0.08, 0.18); // Deep Navy Stop
-                vec3 bgColor3 = vec3(0.20, 0.05, 0.10); // Deep Crimson Stop
-                
-                vec3 bg = mix(mix(bgColor1, bgColor2, vUv.x), bgColor3, vUv.y);
-                
-                // Get fluid density and distort
-                vec2 distort = vUv + (texture2D(uTexture, vUv).rg * 0.005);
-                vec3 fluid = texture2D(uTexture, distort).rgb;
-                
-                // --- FLOWING PARTICLES ---
-                vec3 particleColor = texture2D(uParticles, vUv).rgb;
-                // Subtle additive glow that preserves base color depth
-                fluid += particleColor * 0.4; 
-                
-                // Blend fluid over background (Interactive colors pop over the static base)
-                float fluidVal = clamp(length(fluid) * 1.2, 0.0, 1.2);
-                vec3 c = mix(bg, fluid + bg * 0.4, fluidVal);
-                
-                // Enhanced Specular Highlighting (Metallic Sheen)
-                vec2 step = vec2(0.0015);
-                float hL = length(texture2D(uTexture, vUv - vec2(step.x, 0.0)).rgb);
-                float hR = length(texture2D(uTexture, vUv + vec2(step.x, 0.0)).rgb);
-                float hB = length(texture2D(uTexture, vUv - vec2(0.0, step.y)).rgb);
-                float hT = length(texture2D(uTexture, vUv + vec2(0.0, step.y)).rgb);
-                
-                vec3 n = normalize(vec3(hL - hR, hB - hT, 0.04));
-                vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
-                float spec = pow(max(dot(n, lightDir), 0.0), 32.0);
-                
-                c += spec * 0.4 * fluidVal; 
-                
-                // Subtle Grain
-                float grain = rand(vUv * 50.0) * 0.02;
-                c += grain * fluidVal;
-
-                // Vignette
+                vec3 fluid = texture2D(uTexture, vUv).rgb;
+                vec3 particles = texture2D(uParticles, vUv).rgb;
+                vec3 c = fluid + particles * 0.4;
                 float vig = 1.0 - smoothstep(0.4, 1.4, length(vUv - 0.5));
-                
                 gl_FragColor = vec4(c * vig, 1.0);
             }
         `;
@@ -558,7 +483,7 @@
             // 2. Process Hand Pointers (Multi-Finger)
             activePointers.forEach((p, i) => {
                 if (p.active && p.moved) {
-                    const color = p.gesture === "PINCH" ? { r: 0.8, g: 0.9, b: 1.0 } : palette[(colorIdx + i) % palette.length];
+                    const color = palette[(colorIdx + i) % palette.length];
                     splat(p.x, p.y, p.dx, p.dy, color);
 
                     // SPLAT PARTICLES TOO (Color-matched to interaction)

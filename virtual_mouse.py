@@ -19,7 +19,7 @@ except:
     pass
 
 # --- Configuration (Optimized for Low-End Systems) ---
-W_CAM, H_CAM = 640, 480 
+W_CAM, H_CAM = 320, 240  # Halved: faster frame decoding on low-end CPUs
 FRAME_REDUCTION = 0    # UNLOCKED: Tracking grid now fills the entire camera feed
 SMOOTHENING = 5        
 SENSITIVITY = 50       # Global sensitivity (0-100), 50 is neutral
@@ -83,10 +83,10 @@ cam_stream = CameraThread(0).start()
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,
-    max_num_hands=2, 
-    model_complexity=0,      # LITE MODEL: Fastest for low-end CPUs
-    min_detection_confidence=0.8, # Increased for higher precision
-    min_tracking_confidence=0.8
+    max_num_hands=1,         # 1 hand = half the AI workload
+    model_complexity=0,      # LITE MODEL: fastest inference for low-end CPUs
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
 )
 mp_draw = mp.solutions.drawing_utils
 
@@ -157,24 +157,11 @@ cv2.createTrackbar("Sens", WIN_NAME, SENSITIVITY, 100, on_trackbar)
 p_loc_x, p_loc_y = 0, 0
 c_loc_x, c_loc_y = 0, 0
 is_active = False
-scroll_mode = False
 last_toggle_time = 0
-last_scroll_toggle_time = 0
 prev_right_orientation = None 
-glued_gesture_held = False 
-scroll_midpoint_y = 0
-was_grabbing = False
-# Click & Movement states
-is_holding_left = False
-pinch_start_time = 0
-pinch_start_pos = (0, 0)
-click_lock_pos = (0, 0) # Snapshot for tap stability
-last_release_time = 0
 clutch_offset_x = 0
 clutch_offset_y = 0
 hand_present_prev = False
-last_l_click_time = 0 # Debouncer
-last_r_click_time = 0 # Debouncer
 
 # Internal smoothing variables
 p_loc_y_internal = 0
@@ -220,28 +207,12 @@ def is_hand_open(lm_list):
     return fingers_open >= 3
 
 
-def is_fist(lm_list):
-    # Check if index, middle, ring, and pinky are extended
-    # In a fist, the tips should be BELOW their respective PIP joints (landmark y > pip y)
-    fingers_closed = 0
-    for tip, pip in [(8, 6), (12, 10), (16, 14), (20, 18)]:
-        # In frame coordinates, higher index is lower on screen
-        if lm_list[tip][1] > lm_list[pip][1]:
-            fingers_closed += 1
-    
-    # Thumb check: tip usually tucked in
-    thumb_tucked = lm_list[4][0] > lm_list[3][0] # Simple left/right tuck check for right hand
-    
-    return fingers_closed == 4
+
 
 print("System Initialized.")
 print("GESTURE GUIDE:")
 print("- TOGGLE: Left Hand Open + Right Hand Flip")
 print("- THUMB: Move Cursor")
-print("- THUMB + INDEX + MIDDLE PINCH (Left): Left Click / Drag")
-print("- MIDDLE + RING PINCH (Left Flip): Right Click")
-print("- MAKE FIST (Right): TOGGLE Scroll Mode")
-print("- LEFT PINCH + RIGHT MOVE (In Scroll): Scroll Joystick")
 
 # Internal filter states (Must be outside loop)
 filter_x, filter_y = 0, 0
@@ -419,7 +390,7 @@ while True:
                 smooth_base = max(4, 12 - (SENSITIVITY // 10))
                 distance_smooth = int(np.interp(current_scale, [60, 150], [6, 0]))
                 dynamic_smooth = max(4, smooth_base + distance_smooth)
-                if is_holding_left: dynamic_smooth *= 1.5
+
 
                 # --- 2. Ultra-Smooth Cursor Mapping ---
                 if show_cam_pov and edit_overlay:
@@ -466,200 +437,13 @@ while True:
                     target_freq *= 0.7 # Extra dampening for sub-pixel precision
                 
                 lerp_factor = 1.0 - np.exp(-target_freq * dt)
-                if is_holding_left: lerp_factor *= 0.5 
                 
                 c_loc_x = p_loc_x + (x_mapped - p_loc_x) * lerp_factor
                 c_loc_y = p_loc_y + (y_mapped - p_loc_y) * lerp_factor
 
-                # --- 1. Scroll Toggle Logic (Right Hand Fist) ---
-                curr_glued = is_fist(ctrl_hand)
-                curr_time = time.time()
-                
-                if curr_glued and not glued_gesture_held:
-                    # Increased cooldown to 1.5s for better stability
-                    if curr_time - last_scroll_toggle_time > 1.5:
-                        scroll_mode = not scroll_mode
-                        last_scroll_toggle_time = curr_time
-                        if scroll_mode: pass # Reset on entry
-                        print(f"SCROLL MODE {'ENABLED' if scroll_mode else 'DISABLED'}")
-                glued_gesture_held = curr_glued
+                # NORMAL MODE: Cursor Movement
+                move_mouse_fast(c_loc_x, c_loc_y)
 
-                # --- 2. Action Logic ---
-                if scroll_mode:
-                    if show_cam_pov and edit_overlay:
-                        # Visual Feedback: WHOLE HAND Green Overlay
-                        overlay = img.copy()
-                        points = np.array(ctrl_hand)
-                        hull = cv2.convexHull(points)
-                        cv2.fillPoly(overlay, [hull], (0, 255, 0))
-                        cv2.addWeighted(overlay, 0.4, img, 0.6, 0, img)
-                        cv2.putText(img, "LEFT GRAB + RIGHT MOVE", (W_CAM//2 - 200, 50), cv2.FONT_HERSHEY_PLAIN, 2, (0, 255, 0), 2)
-                    
-                    # Joystick Constants
-                    deadzone = 35
-                    
-                    # --- Left Hand Grabbing ---
-                    dist_l_click = 999
-                    if click_hand:
-                        l_thumb, l_index = click_hand[4], click_hand[8]
-                        l_hand_scale = get_distance(click_hand[0], click_hand[9])
-                        l_threshold = max(25, l_hand_scale * 0.3)
-                        dist_l_click = get_distance(l_thumb, l_index)
-                        is_grabbing = dist_l_click < l_threshold
-                    else:
-                        is_grabbing = False
-                    
-                    if is_grabbing:
-                        # SET MIDPOINT ON START OF GRAB (Using Right hand y for joystick)
-                        if not was_grabbing:
-                            scroll_midpoint_y = y1
-                        
-                        if show_cam_pov and edit_overlay:
-                            # Draw Dynamic Deadzone Visuals around midpoint
-                            cv2.line(img, (0, int(scroll_midpoint_y - deadzone)), (W_CAM, int(scroll_midpoint_y - deadzone)), (0, 0, 150), 2)
-                            cv2.line(img, (0, int(scroll_midpoint_y + deadzone)), (W_CAM, int(scroll_midpoint_y + deadzone)), (0, 0, 150), 2)
-                            cv2.circle(img, (int(x1), int(scroll_midpoint_y)), 10, (0, 0, 255), 2) # Midpoint indicator
-                            cv2.circle(img, (index_tip[0], index_tip[1]), 15, (0, 0, 255), cv2.FILLED)
-                            cv2.putText(img, "SCROLLING", (index_tip[0]+20, index_tip[1]), cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 0, 255), 2)
-                        
-                        # Joystick Logic: Proportional to distance from RELATIVE midpoint
-                        intensity = (SENSITIVITY / 50) ** 2
-                        
-                        # Smooth the input Y to prevent staccato scrolling
-                        y1_smooth = p_loc_y_internal + (y1 - p_loc_y_internal) / 3
-                        
-                        if y1_smooth < scroll_midpoint_y - deadzone:
-                            dist = (scroll_midpoint_y - deadzone) - y1_smooth
-                            base_speed = int(np.interp(dist, (0, 300), (5, 80)))
-                            speed = int(base_speed * intensity)
-                            if not is_over_cam_window(c_loc_x, c_loc_y):
-                                pyautogui.scroll(speed)
-                        elif y1_smooth > scroll_midpoint_y + deadzone:
-                            dist = y1_smooth - (scroll_midpoint_y + deadzone)
-                            base_speed = int(np.interp(dist, (0, 300), (5, 80)))
-                            speed = int(base_speed * intensity)
-                            if not is_over_cam_window(c_loc_x, c_loc_y):
-                                pyautogui.scroll(-speed)
-                        
-                        p_loc_y_internal = y1_smooth
-                    
-                    was_grabbing = is_grabbing
-                    
-                    if show_cam_pov and edit_overlay:
-                        cv2.circle(img, (int(x1), int(y1)), 20, (0, 255, 255), 2)
-                else:
-                    # NORMAL MODE: Cursor Movement + Clicks
-                    move_mouse_fast(c_loc_x, c_loc_y)
-                    
-                    # SAFETY: If cursor enters the protected window zone, force release any clicks
-                    if is_over_cam_window(c_loc_x, c_loc_y):
-                        if is_holding_left:
-                            pyautogui.mouseUp(button='left')
-                            is_holding_left = False
-                            print("Passthrough Protected: Click Force-Released")
-                    
-                    # --- Left Click Logic (Exclusively on Left Hand) ---
-                    left_hand_hold = False
-                    if click_hand:
-                        l_thumb = click_hand[4]
-                        l_index = click_hand[8] 
-                        l_middle = click_hand[12]
-                        
-                        l_hand_scale = get_distance(click_hand[0], click_hand[9])
-                        
-                        # 1. Check if Index and Middle are CLOSE (joined)
-                        join_threshold = max(25, l_hand_scale * 0.4) 
-                        fingers_joined = get_distance(l_index, l_middle) < join_threshold
-                        
-                        # 2. Check if Thumb makes contact with the Index (which is joined to Middle)
-                        # We use a slightly looser threshold because 3 fingers are harder to perfect-pinch
-                        click_threshold = max(22, l_hand_scale * 0.28) 
-                        thumb_touching = get_distance(l_thumb, l_index) < click_threshold
-                        
-                        if fingers_joined and thumb_touching:
-                            left_hand_hold = True
-                            
-                        if show_cam_pov and edit_overlay and left_hand_hold:
-                                cv2.circle(img, (l_index[0], l_index[1]), 15, (0, 0, 255), cv2.FILLED)
-                                cv2.circle(img, (l_middle[0], l_middle[1]), 15, (0, 0, 255), cv2.FILLED)
-                                cv2.putText(img, "3-FINGER CLICK", (l_index[0]+20, l_index[1]), cv2.FONT_HERSHEY_PLAIN, 1.2, (0, 0, 255), 2)
-                    
-                    # Right hand NO LONGER performs its own pinch-clicks
-                    trigger_hold = left_hand_hold
-                    
-                    if trigger_hold:
-                        curr_time = time.time()
-                        # CLICK DEBOUNCER
-                        if not is_holding_left and (curr_time - last_l_click_time > 0.15):
-                            if not is_over_cam_window(c_loc_x, c_loc_y):
-                                # SNAPSHOT: Lock the position for a perfect tap
-                                click_lock_pos = (c_loc_x, c_loc_y)
-                                pyautogui.mouseDown(button='left')
-                                is_holding_left = True
-                                pinch_start_time = curr_time
-                                pinch_start_pos = (x1, y1)
-                                label = "FIXATED"
-                            else:
-                                label = "ZONE PROTECTED"
-                        
-                        # --- 100% ACCURACY LOCK ---
-                        # For the first 120ms, if the hand hasn't moved much, FORCE the cursor to stay at the start pos.
-                        # This avoids the "slippery" click feel.
-                        if is_holding_left:
-                            lock_duration = curr_time - pinch_start_time
-                            dist_from_start = get_distance(pinch_start_pos, (x1, y1))
-                            
-                            # Break lock if hand moves > 30px (User clearly wants to drag)
-                            if lock_duration < 0.12 and dist_from_start < (30 * scale_multiplier):
-                                c_loc_x, c_loc_y = click_lock_pos
-                                label = "CLICK LOCK"
-                                # Force SetCursor (Overriding movement loop for this specific frame)
-                                move_mouse_fast(c_loc_x, c_loc_y)
-                            else:
-                                label = "DRAGGING"
-                        
-                        if show_cam_pov and edit_overlay:
-                            if click_hand:
-                                cv2.line(img, (click_hand[8][0], click_hand[8][1]), (int(x1), int(y1)), (0, 255, 0), 2)
-                            cv2.circle(img, (index_tip[0], index_tip[1]), 15, (0, 255, 255) if label == "CLICK LOCK" else (0, 0, 255), cv2.FILLED)
-                            cv2.putText(img, label, (index_tip[0]+20, index_tip[1]), cv2.FONT_HERSHEY_PLAIN, 1.2, (255, 255, 0), 2)
-                    else:
-                        if is_holding_left:
-                            # STABILIZED TIMING: Enforce a 50ms hold so Windows registers it
-                            if time.time() - pinch_start_time < 0.05:
-                                time.sleep(0.05)
-                            pyautogui.mouseUp(button='left')
-                            is_holding_left = False
-                            last_l_click_time = time.time()
-                    
-                    # Specialized Right Click: Applicable ONLY for Left Hand per split-hand rules
-                    lh_flipped = left_hand_lms[4][0] < left_hand_lms[20][0] if left_hand_lms else False
-                    
-                    if lh_flipped:
-                        lt_tip = left_hand_lms[12] # Middle
-                        lr_tip = left_hand_lms[16] # Ring
-                        dist_lh = get_distance(lt_tip, lr_tip)
-                        # Ensure Index finger is OPEN to distinguish from fist or other gestures
-                        is_index_open = left_hand_lms[8][1] < left_hand_lms[6][1] 
-                        if dist_lh < (20 * scale_multiplier) and is_index_open:
-                            curr_time = time.time()
-                            # RIGHT CLICK DEBOUNCER
-                            if (curr_time - last_r_click_time > 0.3):
-                                if not is_over_cam_window(c_loc_x, c_loc_y):
-                                    # STABILIZE: Freeze cursor for Right Click context menus
-                                    move_mouse_fast(c_loc_x, c_loc_y)
-                                    pyautogui.mouseDown(button='right')
-                                    time.sleep(0.08)
-                                    pyautogui.mouseUp(button='right')
-                                    last_r_click_time = time.time()
-                                    if show_cam_pov and edit_overlay:
-                                        cv2.circle(img, (lt_tip[0], lt_tip[1]), 20, (255, 0, 0), cv2.FILLED)
-                                        cv2.putText(img, "RIGHT CLICK LOCK", (lt_tip[0]+20, lt_tip[1]), cv2.FONT_HERSHEY_PLAIN, 1.2, (255, 0, 0), 2)
-                            else:
-                                if show_cam_pov and edit_overlay: cv2.putText(img, "PROTECTED", (lt_tip[0], lt_tip[1]), cv2.FONT_HERSHEY_PLAIN, 1.2, (0, 0, 255), 2)
-                        elif show_cam_pov and edit_overlay:
-                            cv2.circle(img, (lt_tip[0], lt_tip[1]), 10, (255, 255, 0), 2)
-                            cv2.circle(img, (lr_tip[0], lr_tip[1]), 10, (255, 255, 0), 2)
 
 
                 if show_cam_pov and edit_overlay:

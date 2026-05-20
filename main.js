@@ -10,11 +10,11 @@ let windowHalfY = window.innerHeight / 2;
 
 const PARTICLE_COUNT = 3000;
 const COLORS = [
-    0xf59e0b, // Sunset Orange
-    0xd946ef, // Magenta
-    0x6d28d9, // Vibrant Purple
-    0x1e1b4b, // Deep Electric Blue
-    0x0a0612, // Midnight
+    0xffffff, // White
+    0xcccccc, // Light Grey
+    0x888888, // Mid Grey
+    0x333333, // Dark Grey
+    0x0a0a0a, // Deep Charcoal
 ];
 
 // Shader for Liquid Gradient
@@ -43,22 +43,22 @@ const fragmentShader = `
         float ripple = sin(d * 10.0 - u_time * 2.0) * 0.02 * smoothstep(0.5, 0.0, d);
         liquid += ripple;
         
-        // Iridescent Palette
-        vec3 col1 = vec3(0.96, 0.62, 0.04); // Sunset Orange
-        vec3 col2 = vec3(0.85, 0.27, 0.94); // Magenta
-        vec3 col3 = vec3(0.43, 0.16, 0.85); // Vibrant Purple
-        vec3 col4 = vec3(0.12, 0.11, 0.29); // Deep Electric Blue
-        vec3 col5 = vec3(0.04, 0.02, 0.07); // Midnight Black
+        // Monochrome Palette
+        vec3 col1 = vec3(1.00, 1.00, 1.00); // White
+        vec3 col2 = vec3(0.80, 0.80, 0.80); // Light Grey
+        vec3 col3 = vec3(0.50, 0.50, 0.50); // Mid Grey
+        vec3 col4 = vec3(0.20, 0.20, 0.20); // Dark Grey
+        vec3 col5 = vec3(0.04, 0.04, 0.04); // Near Black
         
         // Layering the colors with smooth transitions
         float mix1 = sin(liquid.x * 1.5 + u_time * 0.2) * 0.5 + 0.5;
         float mix2 = cos(liquid.y * 1.5 + u_time * 0.3) * 0.5 + 0.5;
         float mouseEffect = smoothstep(0.4, 0.0, d);
         
-        vec3 finalCol = mix(col5, col4, mix1);
-        finalCol = mix(finalCol, col3, mix2);
-        finalCol = mix(finalCol, col2, mix1 * mix2);
-        finalCol = mix(finalCol, col1, mouseEffect * 0.9); // Stronger mouse glow
+        // Solid Black Background
+        vec3 finalCol = col1 * mouseEffect * 0.8; // Only show the white interaction glow
+
+        finalCol = mix(finalCol, col1, mouseEffect * 0.8); // White mouse glow
         
         gl_FragColor = vec4(finalCol, 1.0);
     }
